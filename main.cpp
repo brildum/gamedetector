@@ -9,12 +9,15 @@ using namespace std;
 using namespace cv;
 
 #define WINDOW "outputvid"
+#define SKIP 4
 
 RunningStat*** createFrameStats(Mat_<Vec3b> &frame) {
-    RunningStat*** stats = new RunningStat**[frame.rows];
-    for (int i = 0; i < frame.rows; i++) {
-        stats[i] = new RunningStat*[frame.cols];
-        for (int j = 0; j < frame.cols; j++) {
+    int rows = frame.rows/SKIP;
+    int cols = frame.cols/SKIP;
+    RunningStat*** stats = new RunningStat**[rows];
+    for (int i = 0; i < rows; i++) {
+        stats[i] = new RunningStat*[cols];
+        for (int j = 0; j < cols; j++) {
             stats[i][j] = new RunningStat[3];
         }
     }
@@ -22,22 +25,26 @@ RunningStat*** createFrameStats(Mat_<Vec3b> &frame) {
 }
 
 void updateStats(Mat_<Vec3b> &frame, RunningStat*** stat, bool clearStats) {
-    for (int i = 0; i < frame.rows; i++) {
-        for (int j = 0; j < frame.cols; j++) {
+    int rows = frame.rows/SKIP;
+    int cols = frame.cols/SKIP;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
             for (int k = 0; k < 3; k++) {
                 if (clearStats) {
                     stat[i][j][k].clear();
                 }
-                stat[i][j][k].push(frame(i, j)[k]);
+                stat[i][j][k].push(frame(i*SKIP, j*SKIP)[k]);
             }
         }
     }
 }
 
 int detectStaticPixels(Mat_<Vec3b> &frame, RunningStat*** stat, double staticDevThreshold) {
+    int rows = frame.rows/SKIP;
+    int cols = frame.cols/SKIP;
     int staticPixels = 0;
-    for (int i = 0; i < frame.rows; i++) {
-        for (int j = 0; j < frame.cols; j++) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
             for (int k = 0; k < 3; k++) {
                 if (stat[i][j][k].stddev() < staticDevThreshold) {
                     staticPixels++;
@@ -79,38 +86,44 @@ int main(int argc, char **argv) {
     namedWindow(WINDOW, CV_WINDOW_AUTOSIZE);
 
     Mat_<Vec3b> frame;
-    cap >> frame;
-    Size size(frame.cols/3, frame.rows/3);
-    resize(frame, frame, size);
-    RunningStat*** stats = createFrameStats(frame);
+    Size size;
+    RunningStat ***stats = NULL;
+    while (true) {
+        if (cap.grab()) {
+            cap.retrieve(frame);
+            size.width = frame.cols;
+            size.height = frame.rows;
+            stats = createFrameStats(frame);
+            break;
+        }
+    }
 
     list<int> tests;
-
-    int pixelMajority = (size.width * size.height * 3) * .85;
+    int pixelMajority = ((size.width/SKIP) * (size.height/SKIP) * 3) * .85;
     bool gameIsPlaying = true;
     int count = 0;
     while (true) {
-        count++;
-        bool clearStats = false;
         // is there a better way to skip frames?
-        cap >> frame;
-        cap >> frame;
-        resize(frame, frame, size);
-        if (count % 10 == 0) {
-            int staticPixels = detectStaticPixels(frame, stats, 2);
-            printf("Static pixels: %d\n", staticPixels);
-            tests.push_back(staticPixels < pixelMajority);
-            if (tests.size() > 10) {
-                tests.pop_front();
-                gameIsPlaying = sum(tests) > 5;
+        if (cap.grab()) {
+            cap.retrieve(frame);
+            bool clearStats = false;
+            count++;
+            if (count % 20 == 0) {
+                int staticPixels = detectStaticPixels(frame, stats, 2);
+                printf("Static pixels: %d\n", staticPixels);
+                tests.push_back(staticPixels < pixelMajority);
+                if (tests.size() > 10) {
+                    tests.pop_front();
+                    gameIsPlaying = sum(tests) > 5;
+                }
+                clearStats = true;
             }
-            clearStats = true;
+            updateStats(frame, stats, clearStats);
+            if (!gameIsPlaying) {
+                addBlackCornerToFrame(frame);
+            }
+            imshow(WINDOW, frame);
         }
-        updateStats(frame, stats, clearStats);
-        if (!gameIsPlaying) {
-            addBlackCornerToFrame(frame);
-        }
-        imshow(WINDOW, frame);
         if (waitKey(30) == 27) { break; }
     }
 
